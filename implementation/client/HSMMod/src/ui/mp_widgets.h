@@ -18,9 +18,11 @@ struct Card {
     Button button;
     Panel frame, face;
     bool selected = false, live = true;
+    float glow = 0;                           // the hover fade, 0..1 (Paint)
     explicit operator bool() const { return bool(button) && bool(frame) && bool(face); }
 };
 struct Flat { Card card; Text label; };
+Rgba Mix(Rgba a, Rgba b, float t);            // a to b by t
 
 // Makes the page's widgets in one kit's tree.
 class Maker {

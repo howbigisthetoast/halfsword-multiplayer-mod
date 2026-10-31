@@ -25,6 +25,13 @@ struct LobbyPlayer {
     std::string build;                  // their mod build (session/hsm_build.h), empty until their member data comes
 };
 
+// The public-lobby list's filters (the page's chips, in this order): mode, room, compatibility, sorting. All off: every
+// lobby Steam returned, in its order.
+struct BrowserFilter {
+    uint8_t mode = 0;                   // 0: any; else the kBrowserModes entry shown
+    bool hasRoom = false, compatibleOnly = false, mostPlayers = false;
+};
+
 struct LobbyFound {                     // a public lobby from Find
     std::string name, map, mode;
     int players = 0;
@@ -49,6 +56,7 @@ struct LobbyLocal {
     bool modPickPending = false;        // the pick is a modded map whose pak is still being hashed: START waits
     std::vector<LobbyPlayer> players;
     std::vector<LobbyFound> found;
+    BrowserFilter filter;
     int maxPlayers = 8;
 };
 
@@ -56,10 +64,13 @@ struct LobbyLocal {
 enum class LobbyRow : uint8_t { Limit, Time, Respawn, Gear, Tier, FriendlyFire, Damage, WaveBreak, ClearGround, MyTeam, Sync };   // Sync last: the menu builds rows in this order
 
 struct SettingRow { LobbyRow id = LobbyRow::Limit; std::string label, value, hint; bool enabled = false; };
-struct ModeCard { Format format = Format::FreeForAll; std::string name, description; bool selected = false, enabled = false; bool progression = false; bool brawl = false; };   // progression: the extra last card; brawl: free-for-all with gear = Fists
+// The mode cards' groups on the MODE tab (Party joins them with the party modes).
+enum class ModeGroup : uint8_t { Versus, Coop };
+struct ModeCard { Format format = Format::FreeForAll; std::string name, description; bool selected = false, enabled = false; bool progression = false; bool brawl = false;
+                  ModeGroup group = ModeGroup::Versus; };   // progression: the extra last card; brawl: free-for-all with gear = Fists
 struct MapCard { size_t index = 0; std::string name, tag, reason; bool allowed = false, selected = false, enabled = false;
                  bool modded = false; std::string path; };   // modded: index is MapCount() + the custom map's place, path its package path
-struct BrowserRow { std::string name, players, detail; Span note; bool joinable = false; };
+struct BrowserRow { std::string name, players, detail; Span note; bool joinable = false; size_t source = 0; };   // source: its index in LobbyLocal::found
 struct RosterRow {
     std::string name, team;             // team: the formats with teams only
     Rgba swatch;                        // a == 0: none
@@ -67,6 +78,56 @@ struct RosterRow {
 };
 
 inline constexpr size_t kBrowserRows = 6;
+
+// The RULES tab's sections, in page order; each row sits in one.
+enum class LobbySection : uint8_t { Match, Teams, Gear, World, Count };
+inline LobbySection SectionOf(LobbyRow r) {
+    switch (r) {
+        case LobbyRow::FriendlyFire: case LobbyRow::MyTeam: return LobbySection::Teams;
+        case LobbyRow::Gear: case LobbyRow::Tier: return LobbySection::Gear;
+        case LobbyRow::WaveBreak: case LobbyRow::ClearGround: case LobbyRow::Sync: return LobbySection::World;
+        default: return LobbySection::Match;
+    }
+}
+inline const char* SectionName(LobbySection s) {
+    switch (s) {
+        case LobbySection::Teams: return "TEAMS";
+        case LobbySection::Gear: return "GEAR";
+        case LobbySection::World: return "WORLD";
+        default: return "MATCH";
+    }
+}
+
+// The browser's mode chip steps through these (0: any).
+inline const std::vector<std::string>& BrowserModes() {
+    static const std::vector<std::string> m = {"Any mode", "Free-for-all", "Duel", "2 teams", "3 teams", "Brawl", "Survival", "Zombies"};
+    return m;
+}
+inline constexpr size_t kFilterChips = 4;   // mode, has room, compatible only, most players first
+struct FilterChip { std::string label; bool on = false; };
+inline std::vector<FilterChip> FilterChips(const BrowserFilter& f) {
+    const auto& modes = BrowserModes();
+    return {{modes[f.mode < modes.size() ? f.mode : 0], f.mode != 0}, {"Has room", f.hasRoom},
+            {"Compatible only", f.compatibleOnly}, {"Most players first", f.mostPlayers}};
+}
+// A chip clicked: the mode steps on (wrapping to any), the others turn on or off.
+inline BrowserFilter ToggleFilter(BrowserFilter f, size_t chip) {
+    switch (chip) {
+        case 0: f.mode = uint8_t((f.mode + 1) % BrowserModes().size()); break;
+        case 1: f.hasRoom = !f.hasRoom; break;
+        case 2: f.compatibleOnly = !f.compatibleOnly; break;
+        case 3: f.mostPlayers = !f.mostPlayers; break;
+        default: break;
+    }
+    return f;
+}
+inline bool PassesFilter(const LobbyFound& l, const BrowserFilter& f, int maxPlayers) {
+    const auto& modes = BrowserModes();
+    if (f.mode != 0 && f.mode < modes.size() && l.mode != modes[f.mode]) return false;
+    if (f.hasRoom && l.players >= maxPlayers) return false;
+    if (f.compatibleOnly && !l.compatible) return false;
+    return true;
+}
 inline constexpr size_t kModeCardCount = kFormatCount + 2;   // the formats, then Brawl and Progression
 
 struct LobbyScene {
@@ -74,6 +135,9 @@ struct LobbyScene {
     std::string me, badge, status;      // status: not in a lobby only (in one, the pill says it)
     bool idle = false;                  // Host, Find, the browser and the idle hint
     std::vector<BrowserRow> browser;
+    std::vector<FilterChip> filters;    // kFilterChips, while idle
+    std::string browserEmpty;           // why the list is empty (nothing found, or the filters hide it all)
+    std::string browserCount;           // "3 of 7 lobbies shown" (filters on), "7 lobbies", "" (none found)
     bool in = false;                    // the players, Invite and Leave, the modes, the settings, the maps
     std::string playersTitle;
     std::vector<RosterRow> roster;
@@ -87,6 +151,7 @@ struct LobbyScene {
     std::vector<MapCard> maps;          // the pickable maps, kMaps order; none for Progression
     bool start = false;                 // START MATCH: the host, while every known build matches (or the override is on)
     std::string waiting;                // members: "Waiting for the host"; anyone: the build warning, which replaces it
+    std::string summary;                // beside START: the mode, the map and the gear, one line
     bool buildMismatch = false;         // another player is on a different build (waiting says who)
 };
 
@@ -339,6 +404,13 @@ inline std::vector<LobbyRow> SettingsFor(const MatchConfig& c) {
 inline constexpr Format kModeOrder[kFormatCount] = {Format::FreeForAll, Format::Duel, Format::TwoTeams,
                                                     Format::ThreeTeams, Format::PlayersVsBots, Format::Zombies};
 
+// The group of the i-th mode card (kModeOrder, then Brawl, then Progression): known before any scene, so the page can
+// build each card in its group's grid.
+inline ModeGroup ModeGroupAt(size_t i) {
+    if (i < size_t(kFormatCount)) return IsBotFormat(kModeOrder[i]) ? ModeGroup::Coop : ModeGroup::Versus;
+    return i == size_t(kFormatCount) ? ModeGroup::Versus : ModeGroup::Coop;   // Brawl; Progression
+}
+
 inline LobbyScene BuildLobbyScene(const LobbyLocal& l) {
     using namespace lobby_detail;
     LobbyScene s;
@@ -361,9 +433,21 @@ inline LobbyScene BuildLobbyScene(const LobbyLocal& l) {
     s.in = l.phase == LobbyPhase::InLobby;
     if (!s.in) s.status = l.status;
     if (s.idle) {
-        for (const LobbyFound& f : l.found) {
+        s.filters = FilterChips(l.filter);
+        std::vector<size_t> shown;
+        for (size_t i = 0; i < l.found.size(); ++i) if (PassesFilter(l.found[i], l.filter, l.maxPlayers)) shown.push_back(i);
+        if (l.filter.mostPlayers)
+            std::stable_sort(shown.begin(), shown.end(), [&](size_t a, size_t b) { return l.found[a].players > l.found[b].players; });
+        if (!l.found.empty())
+            s.browserCount = shown.size() == l.found.size() ? std::to_string(l.found.size()) + (l.found.size() == 1 ? " lobby" : " lobbies")
+                           : std::to_string(shown.size()) + " of " + std::to_string(l.found.size()) + " lobbies shown";
+        if (l.found.empty()) s.browserEmpty = "No public lobbies yet. REFRESH looks again.";
+        else if (shown.empty()) s.browserEmpty = "No lobby matches these filters.";
+        for (size_t at : shown) {
             if (s.browser.size() >= kBrowserRows) break;
+            const LobbyFound& f = l.found[at];
             BrowserRow r;
+            r.source = at;
             r.name = f.name.empty() ? "Unnamed lobby" : f.name;
             r.players = std::to_string(f.players) + "/" + std::to_string(l.maxPlayers);
             r.detail = f.map;
@@ -414,6 +498,7 @@ inline LobbyScene BuildLobbyScene(const LobbyLocal& l) {
         p.selected = l.progression; p.enabled = l.host; p.progression = true;
         s.modes.push_back(p);
     }
+    for (size_t i = 0; i < s.modes.size(); ++i) s.modes[i].group = ModeGroupAt(i);
     if (!l.progression) for (LobbyRow id : SettingsFor(c)) s.settings.push_back(Row(l, id));
     else s.settings.push_back(Row(l, LobbyRow::Damage));   // co-op fights take player damage too
     if (!l.host) s.hostOnly = "Only the host can change these.";
@@ -453,6 +538,14 @@ inline LobbyScene BuildLobbyScene(const LobbyLocal& l) {
     s.start = l.host && MayStartMatch(l.myBuild, others, l.allowBuildMismatch);
     const bool modWait = l.host && customChosen < l.modMaps.size() && l.modPickPending;
     if (modWait) s.start = false;
+    // The line beside START: what will be played.
+    if (l.progression) s.summary = "PROGRESSION \xC2\xB7 the Tavern, together";
+    else {
+        s.summary = Upper(ModeName(f, c.gear));
+        for (const MapCard& m : s.maps) if (m.selected) s.summary += " \xC2\xB7 " + m.name;
+        if (!IsBrawl(c)) s.summary += " \xC2\xB7 " + std::string(GearName(c.gear));
+        if (!IsBrawl(c) && c.gear != Gear::Own) s.summary += ", tier " + std::to_string(int(c.tier));
+    }
     if (!l.host) s.waiting = "Waiting for the host";
     if (modWait) s.waiting = "Checking the map pack";
     if (s.buildMismatch) s.waiting = l.host && l.allowBuildMismatch ? warn + " (allowed: allow_build_mismatch=1)" : warn;

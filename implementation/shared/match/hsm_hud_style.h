@@ -16,6 +16,20 @@ inline constexpr Rgba kOk{0.35f, 0.65f, 0.25f, 1};
 inline constexpr Rgba kWarn{0.85f, 0.62f, 0.05f, 1};
 inline constexpr Rgba kSceneGrey{0.18f, 0.18f, 0.18f, 1};        // the reference scene behind a panel
 
+// The menus (multiplayer page, Esc panel): "Iron & Blood". Opaque faces, so text is judged on the face itself.
+inline constexpr Rgba kMenuBg{0.0040f, 0.0037f, 0.0033f, 0.97f};    // the page behind everything
+inline constexpr Rgba kMenuPanel{0.0086f, 0.0075f, 0.0065f, 1};     // a column's panel
+inline constexpr Rgba kMenuCard{0.0137f, 0.0116f, 0.0097f, 1};      // a card or button face
+inline constexpr Rgba kMenuCardHover{0.0232f, 0.0194f, 0.0160f, 1};
+inline constexpr Rgba kMenuFrame{0.0423f, 0.0343f, 0.0273f, 1};     // a card's 2 px frame
+inline constexpr Rgba kMenuFrameHover{0.1470f, 0.1195f, 0.0953f, 1};
+inline constexpr Rgba kMenuText{0.8148f, 0.7529f, 0.6514f, 1};
+inline constexpr Rgba kMenuDim{0.3663f, 0.3231f, 0.2623f, 1};       // labels, hints
+inline constexpr Rgba kMenuAccent{0.3419f, 0.0110f, 0.0110f, 1};    // START, the selected frame, the header rule
+inline constexpr Rgba kMenuAccentInk{0.8070f, 0.1441f, 0.1022f, 1}; // the accent as text: tabs, section labels, the pill
+inline constexpr Rgba kMenuOk{0.1590f, 0.5210f, 0.1714f, 1};
+inline constexpr Rgba kMenuWarn{0.7454f, 0.4342f, 0.0648f, 1};
+
 // Relative luminance of a linear colour (alpha ignored).
 inline double Luminance(Rgba c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
 

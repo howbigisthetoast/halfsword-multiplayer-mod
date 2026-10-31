@@ -7,10 +7,7 @@
 
 namespace hsm::ui::mp {
 namespace {
-constexpr Rgba kFace{0.045f, 0.040f, 0.036f, 0.96f};
-constexpr Rgba kFaceHover{0.10f, 0.09f, 0.08f, 0.98f};
-constexpr Rgba kFrame{0.45f, 0.47f, 0.50f, 0.30f};
-constexpr Rgba kFrameHover{0.45f, 0.47f, 0.50f, 0.85f};
+constexpr float kGlowStep = 0.18f;            // the hover fade: a share of the way per frame (about 0.1 s at 60 fps)
 constexpr Rgba kClear{1, 1, 1, 0};
 constexpr Rgba kNone{0, 0, 0, 0};
 constexpr float kMeterWidth = 300;
@@ -56,11 +53,15 @@ Flat Maker::MakeFlat(const std::string& text, float size, Margin pad) {
     return f;
 }
 
+Rgba Mix(Rgba a, Rgba b, float t) { return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t}; }
+
 void Paint(Card& c) {
     if (!c) return;
     const bool hover = c.live && c.button.Hovered();
-    c.frame.Color(c.selected ? style::kBlood : hover ? kFrameHover : kFrame);
-    c.face.Color(hover ? kFaceHover : kFace);
+    c.glow += ((hover ? 1.f : 0.f) - c.glow) * kGlowStep;
+    if (c.glow < 0.01f) c.glow = 0; else if (c.glow > 0.99f) c.glow = 1;
+    c.frame.Color(c.selected ? style::kMenuAccent : Mix(style::kMenuFrame, style::kMenuFrameHover, c.glow));
+    c.face.Color(Mix(style::kMenuCard, style::kMenuCardHover, c.glow));
 }
 
 bool Clicked(Card& c) { return c && c.button.Clicked(); }

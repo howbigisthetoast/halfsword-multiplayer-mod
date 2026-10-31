@@ -60,11 +60,25 @@ static void TestTeamInk() {
     for (int t = -1; t <= 4; ++t) CHECK(Near(TeamInk(t).a, 1));
 }
 
+static void TestMenuPalette() {
+    // Every menu text colour reads on every face it can sit on; START's label reads on the accent.
+    for (Rgba face : {kMenuBg, kMenuPanel, kMenuCard, kMenuCardHover, Over(kMenuBg, {0, 0, 0, 1})})
+        for (Rgba c : {kMenuText, kMenuDim, kMenuAccentInk, kMenuOk, kMenuWarn}) CHECK(Contrast(c, face) >= 4.5);
+    for (int t = -1; t < 4; ++t) CHECK(Contrast(TeamInk(t), kMenuCard) >= 4.5);
+    CHECK(Contrast(kMenuText, kMenuAccent) >= 4.5);
+    // Hover and selection show: each step is brighter than the last.
+    CHECK(Luminance(kMenuCard) > Luminance(kMenuPanel) && Luminance(kMenuCardHover) > Luminance(kMenuCard));
+    CHECK(Luminance(kMenuFrameHover) > Luminance(kMenuFrame) && Luminance(kMenuFrame) > Luminance(kMenuCardHover));
+    CHECK(kMenuAccent.r > 10 * kMenuAccent.g && kMenuAccentInk.r > kMenuAccentInk.g);   // blood red, not orange
+    CHECK(Contrast(kMenuAccent, kMenuCard) < 4.5);   // the accent is for frames and START; text takes kMenuAccentInk
+}
+
 int main() {
     TestPlanValues();
     TestContrastMath();
     TestTextIsReadable();
     TestTeamInk();
+    TestMenuPalette();
     if (g_fail) { std::printf("%d hud style checks failed\n", g_fail); return 1; }
     std::printf("all hud style tests passed\n");
     return 0;

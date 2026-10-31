@@ -623,6 +623,89 @@ static void TestModdedMaps() {
     CHECK(BuildLobbyScene(pr).maps.empty());
 }
 
+static void TestGroupsAndSections() {
+    LobbyScene s = BuildLobbyScene(InLobby(true));
+    CHECK(s.modes.size() == kModeCardCount);
+    for (size_t i = 0; i < s.modes.size(); ++i) CHECK(s.modes[i].group == ModeGroupAt(i));
+    for (const ModeCard& c : s.modes) {
+        const bool coop = c.progression || (!c.brawl && IsBotFormat(c.format));
+        CHECK((c.group == ModeGroup::Coop) == coop);
+    }
+    CHECK(ModeGroupAt(0) == ModeGroup::Versus && ModeGroupAt(size_t(kFormatCount)) == ModeGroup::Versus &&
+          ModeGroupAt(size_t(kFormatCount) + 1) == ModeGroup::Coop);
+    CHECK(SectionOf(LobbyRow::Limit) == LobbySection::Match && SectionOf(LobbyRow::Damage) == LobbySection::Match);
+    CHECK(SectionOf(LobbyRow::MyTeam) == LobbySection::Teams && SectionOf(LobbyRow::FriendlyFire) == LobbySection::Teams);
+    CHECK(SectionOf(LobbyRow::Gear) == LobbySection::Gear && SectionOf(LobbyRow::Tier) == LobbySection::Gear);
+    CHECK(SectionOf(LobbyRow::ClearGround) == LobbySection::World && SectionOf(LobbyRow::Sync) == LobbySection::World);
+    CHECK(std::string(SectionName(LobbySection::Match)) == "MATCH" && std::string(SectionName(LobbySection::World)) == "WORLD");
+    for (size_t i = 0; i <= size_t(LobbyRow::Sync); ++i) CHECK(SectionOf(LobbyRow(i)) < LobbySection::Count);
+}
+
+static void TestSummary() {
+    LobbyScene s = BuildLobbyScene(InLobby(true, Format::TwoTeams, Gear::RandomTier));
+    CHECK(s.summary.rfind("2 TEAMS " + kDot + " ", 0) == 0);
+    CHECK(s.summary.find("Random by tier, tier ") != std::string::npos);
+    LobbyScene own = BuildLobbyScene(InLobby(true));
+    CHECK(own.summary.find("Own loadouts") != std::string::npos && own.summary.find("tier") == std::string::npos);
+    LobbyScene brawl = BuildLobbyScene(InLobby(true, Format::FreeForAll, Gear::Fists));
+    CHECK(brawl.summary.rfind("BRAWL", 0) == 0 && brawl.summary.find("loadouts") == std::string::npos);
+    LobbyLocal pr = InLobby(false); pr.progression = true;
+    CHECK(BuildLobbyScene(pr).summary.rfind("PROGRESSION", 0) == 0);
+    LobbyLocal idle; idle.phase = LobbyPhase::Idle;
+    CHECK(BuildLobbyScene(idle).summary.empty());
+}
+
+static void TestFilters() {
+    LobbyLocal l; l.phase = LobbyPhase::Idle; l.version = "0.2.0";
+    LobbyFound duel; duel.name = "D"; duel.mode = "Duel"; duel.players = 2; duel.compatible = true;
+    LobbyFound full; full.name = "F"; full.mode = "Free-for-all"; full.players = 8; full.compatible = true;
+    LobbyFound old; old.name = "O"; old.mode = "Duel"; old.players = 5; old.compatible = false;
+    l.found = {duel, full, old};
+    LobbyScene s = BuildLobbyScene(l);
+    CHECK(s.filters.size() == kFilterChips && s.browser.size() == 3 && s.browserCount == "3 lobbies");
+    for (const FilterChip& c : s.filters) CHECK(!c.on);
+    CHECK(s.filters[0].label == "Any mode");
+    // The mode chip steps through every mode and wraps to any.
+    BrowserFilter f;
+    for (size_t i = 0; i < BrowserModes().size(); ++i) f = ToggleFilter(f, 0);
+    CHECK(f.mode == 0);
+    f = ToggleFilter(f, 0); f = ToggleFilter(f, 0);
+    CHECK(BrowserModes()[f.mode] == "Duel");
+    l.filter = f;
+    s = BuildLobbyScene(l);
+    CHECK(s.filters[0].on && s.filters[0].label == "Duel" && s.browser.size() == 2 && s.browserCount == "2 of 3 lobbies shown");
+    l.filter = ToggleFilter(l.filter, 2);                 // compatible only
+    s = BuildLobbyScene(l);
+    CHECK(s.filters[2].on && s.browser.size() == 1 && s.browser[0].name == "D");
+    l.filter = {};
+    l.filter = ToggleFilter(l.filter, 1);                 // has room
+    s = BuildLobbyScene(l);
+    CHECK(s.browser.size() == 2 && s.browser[0].name == "D" && s.browser[1].name == "O");
+    l.filter = {};
+    l.filter = ToggleFilter(l.filter, 3);                 // most players first
+    s = BuildLobbyScene(l);
+    CHECK(s.browser.size() == 3 && s.browser[0].name == "F" && s.browser[1].name == "O" && s.browser[2].name == "D");
+    CHECK(s.browser[0].source == 1 && s.browser[1].source == 2 && s.browser[2].source == 0);   // what JOIN joins
+    CHECK(s.browserEmpty.empty());
+    CHECK(s.browserCount == "3 lobbies");
+    l.filter = ToggleFilter(l.filter, 3);
+    CHECK(!l.filter.mostPlayers && ToggleFilter(l.filter, 9).mode == l.filter.mode);
+    // Every browser mode is a name a host can publish.
+    for (Format m : kModeOrder) {
+        bool listed = false;
+        for (const std::string& n : BrowserModes()) listed = listed || n == ModeName(m, Gear::Own);
+        CHECK(listed);
+    }
+    l.filter = {}; l.filter.mode = 7;                     // Zombies: none listed
+    s = BuildLobbyScene(l);
+    CHECK(s.browser.empty() && s.browserEmpty == "No lobby matches these filters." && s.browserCount == "0 of 3 lobbies shown");
+    l.found.clear(); l.filter = {};
+    s = BuildLobbyScene(l);
+    CHECK(s.browserCount.empty() && !s.browserEmpty.empty() && s.browserEmpty != "No lobby matches these filters.");
+    LobbyLocal in = InLobby(true);
+    CHECK(BuildLobbyScene(in).filters.empty());
+}
+
 int main() {
     TestPrevNext();
     TestStepSetting();
@@ -647,6 +730,9 @@ int main() {
     TestModdedMaps();
     TestBuildMismatch();
     TestDamage();
+    TestGroupsAndSections();
+    TestSummary();
+    TestFilters();
     if (g_fail) { std::printf("%d lobby scene checks failed\n", g_fail); return 1; }
     std::printf("all lobby scene tests passed\n");
     return 0;
