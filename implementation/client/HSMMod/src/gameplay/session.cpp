@@ -498,7 +498,7 @@ public:
         }
         if (!inFight_) ui::Tick(*this, gameMode);   // the main menu exists only in menu levels (its scan walks every object)
         else if (FighterLevel()) ui::LeaveMenus();
-        if (net_ && FighterLevel()) { TickOwnBuild(); TickPlayerDed(); ProbeGiveUpFunctions(); }
+        if (net_ && FighterLevel()) { TickOwnBuild(); TickPlayerDed(); TickMatchWon(); ProbeGiveUpFunctions(); }
         EnsureLocalFighter();
         test::Tick(adapter_, InFightLevel(), dt);
         if (cfg_.record) recorder_.Tick(adapter_, gameMode, FighterLevel(), currentLevel_, adapter_.PlayerWillie(0), dt);
@@ -2210,22 +2210,6 @@ private:
         int n = HookScript(kStockFlowOwner, "Willie_BP_C", "Event Lose Match", block("Event Lose Match"));
         n += HookScript(kStockFlowOwner, "Willie_BP_C", "Force Finish Match", block("Force Finish Match"));
         n += HookScript(kStockFlowOwner, "Willie_BP_C", "Call Minus Enemy", block("Call Minus Enemy"));
-        // The game's own give-up pose (kneel, weapon dropped, voice lines) on this machine's fighter. Holding G made it play
-        // in every Survival rematch but never in the first match (probe log: Give Up flips to 1 half a second into the
-        // hold); the lose it leads to is blocked above, the session decides what G means (GiveUpTick). The flag is cleared
-        // so nothing else reads a surrender. Other fighters' kneels (bots giving up) are left alone.
-        n += HookScript(kStockFlowOwner, "Willie_BP_C", "Kneel Event", [this](ScriptCall& c) {
-            if (!stockFlowGuard_) return false;
-            if (c.self() != myWillie_.load()) {
-                if (++kneelOther_ % 20 == 1) HSM_LOG("session: Kneel Event on %s, not my fighter %s; left alone (%u so far)", ObjectName(c.self()).c_str(),
-                                                    ObjectName(myWillie_.load()).c_str(), kneelOther_);
-                return false;
-            }
-            SetBool(c.self(), "Give Up", false);
-            SetBool(c.self(), "Give Up 2 (Temp)", false);
-            if (++kneelBlocked_ % 20 == 1) HSM_LOG("session: blocked stock \"Kneel Event\" on my fighter during a session match (%u so far)", kneelBlocked_);
-            return true;
-        });
         HSM_LOG("session: stock win/lose flow guard %s (%d function(s) hooked now)", ScriptHookActive() ? "on" : "NOT ACTIVE (no script VM hook)", n);
     }
 
@@ -2353,6 +2337,23 @@ private:
         if (!GetBool(lastGameMode_, "Player DED", ded) || !ded) return;
         SetBool(lastGameMode_, "Player DED", false);
         HSM_LOG("session: the game mode still had Player DED set with my fighter alive; cleared (%u)", ++dedCleared_);
+    }
+    // The game's give-up (the kneel on G, the weapon dropped, the voice lines) keys on its game mode's "Match Won": with it
+    // set, G does nothing. The first Survival match runs the game's own win logic, so Match Won is 1 in its breaks and 0
+    // in its first wave (the one place the give-up works as designed); a rematch never runs that logic, Match Won stays 0
+    // and every G hold in a break starts the give-up too (probe dump). In a bot format the referee's phase is that logic,
+    // so the game is told the same thing: Match Won is 1 in the break between waves and 0 in a fought wave. Read with the
+    // clocks run on, as GiveUpTick does, so the key and the flag agree on where a break ends.
+    void TickMatchWon() {
+        if (!stockFlowGuard_ || !(lastGameMode_ && ObjectAt(lastGameModeIndex_) == lastGameMode_ && adapter_.World() == lastGameMode_)) return;
+        const MatchInfo mi = Extrapolate(info_, infoAt_, NowMs());
+        const bool fought = mi.phase == uint8_t(MatchPhase::Live) || mi.phase == uint8_t(MatchPhase::SuddenDeath);
+        if (!IsBotFormat(Format(mi.format)) || !fought) return;
+        const bool want = InWaveBreak(mi);
+        bool won = false;
+        if (!GetBool(lastGameMode_, "Match Won", won) || won == want) return;
+        SetBool(lastGameMode_, "Match Won", want);
+        HSM_LOG("session: game mode Match Won %d -> %d (%s) (%u)", int(won), int(want), want ? "break between waves" : "wave being fought", ++wonSet_);
     }
     void TickOwnBuild() {
         if (!adapter_.BuildOn()) { ownBuildActor_ = nullptr; return; }
@@ -6204,7 +6205,7 @@ private:
     uint32_t ownDiedAt_ = 0;
     GiveUpHold giveUp_;
     std::unordered_map<uint8_t, uint32_t> gaveUp_;   // host: entity -> when it held G (free-for-all, teams, Duel)
-    uint32_t kneelBlocked_ = 0, dedCleared_ = 0, kneelOther_ = 0;
+    uint32_t dedCleared_ = 0, wonSet_ = 0;
     int probeBody_ = 0;
     std::set<std::string> probeDumped_;
     UObject* giveUpProbed_ = nullptr; uint32_t probeHeldAt_ = 0; int probeLines_ = 0;   // the give-up probe (ProbeGiveUpFunctions)
