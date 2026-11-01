@@ -499,7 +499,7 @@ public:
         }
         if (!inFight_) ui::Tick(*this, gameMode);   // the main menu exists only in menu levels (its scan walks every object)
         else if (FighterLevel()) ui::LeaveMenus();
-        if (net_ && FighterLevel()) { TickOwnBuild(); TickPlayerDed(); TickMatchWon(); }
+        if (net_ && FighterLevel()) { TickOwnBuild(); TickStockFlags(); }
         EnsureLocalFighter();
         test::Tick(adapter_, InFightLevel(), dt);
         if (cfg_.record) recorder_.Tick(adapter_, gameMode, FighterLevel(), currentLevel_, adapter_.PlayerWillie(0), dt);
@@ -2261,30 +2261,29 @@ private:
     // The player's own fighter is the game's, built from this machine's save before the mod sees it, and under owner sync
     // it is the body that is simulated: CopyPassport only builds the fighters the mod spawns, so pre20 left it at the
     // save's build (a Free Mode Weight 2.0 still lifted a 0.5 one, not the other way round). Once per body and build.
-    // The game mode's "Player DED" is set when the player's fighter dies and nothing clears it for a rematch: the first
-    // match's loss stayed on in every match after it. The flag follows the fighter again: cleared once the player's body is
-    // alive and not waiting for a respawn.
-    void TickPlayerDed() {
+    // The game mode's "Match Won" and "Player DED" follow the referee's match state, for every format (StockFlagsFor,
+    // match/hsm_match_won.h): the game's own give-up (the kneel on G, the dropped weapon, the voice lines) keys on them, and
+    // they were left as the first match left them. Read with the clocks run on, as GiveUpTick does, so the key and the
+    // flags agree on where a break ends.
+    void TickStockFlags() {
         if (!stockFlowGuard_ || !(lastGameMode_ && ObjectAt(lastGameModeIndex_) == lastGameMode_ && adapter_.World() == lastGameMode_)) return;
         UObject* own = adapter_.PlayerWillie(0);
-        if (!own || adapter_.IsDead(own) || ownDeadPending_ || !EntityAlive(MyEntity())) return;
-        bool ded = false;
-        if (!GetBool(lastGameMode_, "Player DED", ded) || !ded) return;
-        SetBool(lastGameMode_, "Player DED", false);
-        HSM_LOG("session: the game mode still had Player DED set with my fighter alive; cleared (%u)", ++dedCleared_);
-    }
-    // The game's own give-up (the kneel on G, the dropped weapon, the voice lines) does nothing while its game mode says
-    // "Match Won" (MatchWonFor, match/hsm_match_won.h). Read with the clocks run on, as GiveUpTick does, so the key and the
-    // flag agree on where a break ends.
-    void TickMatchWon() {
-        if (!stockFlowGuard_ || !(lastGameMode_ && ObjectAt(lastGameModeIndex_) == lastGameMode_ && adapter_.World() == lastGameMode_)) return;
-        const MatchWonFlag want = MatchWonFor(Extrapolate(info_, infoAt_, NowMs()));
-        if (want == MatchWonFlag::Leave) return;
-        const bool set = want == MatchWonFlag::Set;
-        bool won = false;
-        if (!GetBool(lastGameMode_, "Match Won", won) || won == set) return;
-        SetBool(lastGameMode_, "Match Won", set);
-        HSM_LOG("session: game mode Match Won %d -> %d (%s) (%u)", int(won), int(set), set ? "break between waves" : "wave being fought", ++wonSet_);
+        const bool alive = own && !adapter_.IsDead(own) && !ownDeadPending_ && EntityAlive(MyEntity());
+        const MatchInfo mi = Extrapolate(info_, infoAt_, NowMs());
+        const StockMatchFlags want = StockFlagsFor(mi, alive);
+        bool now = false;
+        if (want.matchWon != MatchWonFlag::Leave) {
+            const bool set = want.matchWon == MatchWonFlag::Set;
+            if (GetBool(lastGameMode_, "Match Won", now) && now != set) {
+                SetBool(lastGameMode_, "Match Won", set);
+                HSM_LOG("session: game mode Match Won %d -> %d (%s, format %u) (%u)", int(now), int(set), set ? "break between waves" : "round or wave being fought",
+                        unsigned(mi.format), ++wonSet_);
+            }
+        }
+        if (want.clearPlayerDed && GetBool(lastGameMode_, "Player DED", now) && now) {
+            SetBool(lastGameMode_, "Player DED", false);
+            HSM_LOG("session: the game mode still had Player DED set with my fighter alive; cleared (%u)", ++dedCleared_);
+        }
     }
     void TickOwnBuild() {
         if (!adapter_.BuildOn()) { ownBuildActor_ = nullptr; return; }
@@ -6135,7 +6134,7 @@ private:
     uint32_t ownDiedAt_ = 0;
     GiveUpHold giveUp_;
     std::unordered_map<uint8_t, uint32_t> gaveUp_;   // host: entity -> when it held G (free-for-all, teams, Duel)
-    uint32_t dedCleared_ = 0, wonSet_ = 0;           // TickPlayerDed / TickMatchWon: times the game mode's flags were changed
+    uint32_t dedCleared_ = 0, wonSet_ = 0;           // TickStockFlags: times the game mode's flags were changed
     bool giveUpWait_ = false;                        // G is held but there is nothing to give up yet (queued for respawn / round gap)
     MapResetGate mapGate_;                           // a queued map reset waits for the respawn and the drop clear
     uint16_t mapResetSeq_ = 0;                       // host: the count of MapResets sent

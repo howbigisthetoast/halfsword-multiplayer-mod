@@ -1,5 +1,6 @@
-// The game mode's Match Won flag per format and phase (MatchWonFor). The bug: after a Survival rematch (and from the first
-// match in the Abyss) the flag stayed clear in the break between waves, so holding G to skip it started the game's give-up.
+// The game mode's Match Won and Player DED flags per format, phase and fighter state (StockFlagsFor). The bug: after a
+// Survival rematch (and from the first match in the Abyss) Match Won stayed clear in the break between waves and Player DED
+// stayed set from the first match's loss, so holding G to skip the break started the game's give-up.
 #include "match/hsm_match_won.h"
 #include <cstdio>
 
@@ -21,22 +22,32 @@ static void TestBotFormats() {
     }
 }
 
-static void TestOutsideAFight() {
-    for (MatchPhase p : {MatchPhase::Idle, MatchPhase::Countdown, MatchPhase::Results}) {
-        CHECK(MatchWonFor(Info(Format::PlayersVsBots, p)) == MatchWonFlag::Leave);
-        CHECK(MatchWonFor(Info(Format::Zombies, p, 30000)) == MatchWonFlag::Leave);               // a stale gap time counts for nothing
+static void TestEveryOtherFormatIsClearInARound() {
+    for (Format f : {Format::FreeForAll, Format::TwoTeams, Format::ThreeTeams, Format::Duel}) {
+        CHECK(MatchWonFor(Info(f)) == MatchWonFlag::Clear);                                       // never set outside a bot format's break
+        CHECK(MatchWonFor(Info(f, MatchPhase::SuddenDeath)) == MatchWonFlag::Clear);
     }
+    CHECK(MatchWonFor(Info(Format::Duel, MatchPhase::Live, 3000)) == MatchWonFlag::Leave);        // a Duel's round gap is not a round
 }
 
-static void TestOtherFormatsUntouched() {
-    for (Format f : {Format::FreeForAll, Format::TwoTeams, Format::ThreeTeams, Format::Duel}) {
-        CHECK(MatchWonFor(Info(f)) == MatchWonFlag::Leave);
-        CHECK(MatchWonFor(Info(f, MatchPhase::Live, 3000)) == MatchWonFlag::Leave);               // a Duel's round gap is not a wave break
-    }
+static void TestOutsideAFight() {
+    for (Format f : {Format::PlayersVsBots, Format::Zombies, Format::FreeForAll, Format::Duel})
+        for (MatchPhase p : {MatchPhase::Idle, MatchPhase::Countdown, MatchPhase::Results}) {
+            CHECK(MatchWonFor(Info(f, p)) == MatchWonFlag::Leave);
+            CHECK(MatchWonFor(Info(f, p, 30000)) == MatchWonFlag::Leave);                         // a stale gap time counts for nothing
+        }
+}
+
+static void TestPlayerDedFollowsTheFighter() {
+    const MatchInfo wave = Info(Format::PlayersVsBots);
+    CHECK(StockFlagsFor(wave, true).clearPlayerDed);
+    CHECK(!StockFlagsFor(wave, false).clearPlayerDed);                                            // dead or waiting: the game's flag stands
+    CHECK(StockFlagsFor(Info(Format::Duel, MatchPhase::Live, 3000), true).clearPlayerDed);        // alive in a gap, the flag is still stale
+    CHECK(StockFlagsFor(Info(Format::Zombies, MatchPhase::Live, 30000), true).matchWon == MatchWonFlag::Set);
 }
 
 int main() {
-    TestBotFormats(); TestOutsideAFight(); TestOtherFormatsUntouched();
+    TestBotFormats(); TestEveryOtherFormatIsClearInARound(); TestOutsideAFight(); TestPlayerDedFollowsTheFighter();
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::puts("hsm_match_won ok");
     return 0;
