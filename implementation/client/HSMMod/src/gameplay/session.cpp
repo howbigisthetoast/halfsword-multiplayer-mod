@@ -498,7 +498,7 @@ public:
         }
         if (!inFight_) ui::Tick(*this, gameMode);   // the main menu exists only in menu levels (its scan walks every object)
         else if (FighterLevel()) ui::LeaveMenus();
-        if (net_ && FighterLevel()) TickOwnBuild();
+        if (net_ && FighterLevel()) { TickOwnBuild(); ProbeGiveUpFunctions(); }
         EnsureLocalFighter();
         test::Tick(adapter_, InFightLevel(), dt);
         if (cfg_.record) recorder_.Tick(adapter_, gameMode, FighterLevel(), currentLevel_, adapter_.PlayerWillie(0), dt);
@@ -2260,6 +2260,36 @@ private:
     // The player's own fighter is the game's, built from this machine's save before the mod sees it, and under owner sync
     // it is the body that is simulated: CopyPassport only builds the fighters the mod spawns, so pre20 left it at the
     // save's build (a Free Mode Weight 2.0 still lifted a 0.5 one, not the other way round). Once per body and build.
+    // Diagnostic (scratch branch): which function of the player's fighter starts the game's own give-up (the kneel, the
+    // dropped weapon and the voice lines). Once per body: the class's functions with a give-up word in the name, and every
+    // input-action event. While G is held (ProbeGiveUpHeld) the give-up flags are logged twice a second.
+    void ProbeGiveUpFunctions() {
+        UObject* w = MyWillieLive();
+        if (!w || w == giveUpProbed_) return;
+        giveUpProbed_ = w;
+        const UClass* cls = ue::ClassOf(w);
+        auto lower = [](std::string x) { for (char& c : x) c = char(tolower(static_cast<unsigned char>(c))); return x; };
+        int n = 0, listed = 0;
+        for (UFunction* f : ue::FunctionsWithPrefix(cls, "")) {
+            ++n;
+            const std::string name = ue::ObjectName(reinterpret_cast<UObject*>(f)), l = lower(name);
+            const bool give = l.find("give") != std::string::npos || l.find("surrender") != std::string::npos ||
+                              l.find("kneel") != std::string::npos || l.find("yield") != std::string::npos;
+            if (!give && l.rfind("inpactevt_", 0) != 0) continue;
+            std::string params;
+            for (ue::FProperty* p : ue::Params(f)) params += (params.empty() ? "" : ", ") + ue::PropertyName(p);
+            if (++listed <= 120) HSM_LOG("probe: %s %s (%s)", give ? "give-up function" : "input event", name.c_str(), params.c_str());
+        }
+        HSM_LOG("probe: %s has %d function(s) of its own, %d listed", ue::ObjectName(reinterpret_cast<UObject*>(const_cast<UClass*>(cls))).c_str(), n, listed);
+    }
+    void ProbeGiveUpHeld(UObject* own, uint32_t now, bool skip) {
+        if (!own || now < probeHeldAt_ || probeLines_ > 80) return;
+        probeHeldAt_ = now + 500;
+        bool a = false, b = false;
+        GetBool(own, "Give Up", a); GetBool(own, "Give Up 2 (Temp)", b);
+        HSM_LOG("probe: G down (%s) Give Up=%d Give Up 2=%d", skip ? "break" : "wave", int(a), int(b));
+        ++probeLines_;
+    }
     void TickOwnBuild() {
         if (!adapter_.BuildOn()) { ownBuildActor_ = nullptr; return; }
         UObject* w = MyWillieLive();
@@ -4454,6 +4484,7 @@ private:
                 down = pid == GetCurrentProcessId();
             }
         }
+        if (down) ProbeGiveUpHeld(own, now, skip);
         if (down && waiting) {
             if (!giveUpWait_) HSM_LOG("match: G held, but there is nothing to give up (dead or waiting for the next round)");
             giveUpWait_ = true;
@@ -6109,6 +6140,7 @@ private:
     uint32_t ownDiedAt_ = 0;
     GiveUpHold giveUp_;
     std::unordered_map<uint8_t, uint32_t> gaveUp_;   // host: entity -> when it held G (free-for-all, teams, Duel)
+    UObject* giveUpProbed_ = nullptr; uint32_t probeHeldAt_ = 0; int probeLines_ = 0;   // the give-up probe (ProbeGiveUpFunctions)
     bool giveUpWait_ = false;                        // G is held but there is nothing to give up yet (queued for respawn / round gap)
     MapResetGate mapGate_;                           // a queued map reset waits for the respawn and the drop clear
     uint16_t mapResetSeq_ = 0;                       // host: the count of MapResets sent
