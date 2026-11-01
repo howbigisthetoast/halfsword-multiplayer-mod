@@ -2278,6 +2278,7 @@ private:
         UObject* w = MyWillieLive();
         if (!w || w == giveUpProbed_) return;
         giveUpProbed_ = w;
+        ++probeBody_;
         const UClass* cls = ue::ClassOf(w);
         auto lower = [](std::string x) { for (char& c : x) c = char(tolower(static_cast<unsigned char>(c))); return x; };
         int n = 0, listed = 0;
@@ -2293,6 +2294,35 @@ private:
         }
         HSM_LOG("probe: %s has %d function(s) of its own, %d listed", ue::ObjectName(reinterpret_cast<UObject*>(const_cast<UClass*>(cls))).c_str(), n, listed);
     }
+    // Every plain property (bool, int, float, double, byte) of an object and its Blueprint supers, appended to
+    // HSMMod.probe.txt as "label<TAB>Class.Property<TAB>value" so a first match and a rematch can be diffed.
+    void ProbeDump(const std::string& label, UObject* o) {
+        if (!o) return;
+        FILE* f = _wfopen(InstanceFilePath(L"HSMMod", L".probe.txt").c_str(), L"a");
+        if (!f) return;
+        size_t n = 0;
+        for (const UClass* c = ue::ClassOf(o); c; c = ue::SuperOf(c)) {
+            const std::string cn = ue::ObjectName(reinterpret_cast<UObject*>(const_cast<UClass*>(c)));
+            if (cn == "Actor" || cn == "Pawn" || cn == "Character" || cn == "Object" || cn == "Info" || cn == "GameModeBase") break;
+            for (ue::FProperty* p : ue::StructProperties(c)) {
+                if (ue::PropertyArrayDim(p) != 1) continue;
+                const std::string type = ue::PropertyType(p);
+                const uint8_t* at = reinterpret_cast<const uint8_t*>(o) + ue::PropertyOffset(p);
+                const int32_t size = ue::PropertySize(p);
+                char v[48] = "";
+                if (type == "BoolProperty") { bool b = false; if (!ue::GetBoolValue(p, at, b)) continue; std::snprintf(v, sizeof v, "%d", int(b)); }
+                else if (type == "IntProperty" && size == 4) { int32_t x; std::memcpy(&x, at, 4); std::snprintf(v, sizeof v, "%d", x); }
+                else if (type == "FloatProperty" && size == 4) { float x; std::memcpy(&x, at, 4); std::snprintf(v, sizeof v, "%.4g", double(x)); }
+                else if (type == "DoubleProperty" && size == 8) { double x; std::memcpy(&x, at, 8); std::snprintf(v, sizeof v, "%.6g", x); }
+                else if ((type == "ByteProperty" || type == "EnumProperty") && size == 1) std::snprintf(v, sizeof v, "%u", unsigned(*at));
+                else continue;
+                std::fprintf(f, "%s\t%s.%s\t%s\n", label.c_str(), cn.c_str(), ue::PropertyName(p).c_str(), v);
+                ++n;
+            }
+        }
+        std::fclose(f);
+        HSM_LOG("probe: dumped %zu propert(ies) of %s for '%s' to HSMMod.probe.txt", n, ue::ObjectName(o).c_str(), label.c_str());
+    }
     void ProbeGiveUpHeld(UObject* own, uint32_t now, bool skip) {
         if (!own || now < probeHeldAt_ || probeLines_ > 80) return;
         probeHeldAt_ = now + 500;
@@ -2300,6 +2330,11 @@ private:
         GetBool(own, "Give Up", a); GetBool(own, "Give Up 2 (Temp)", b);
         HSM_LOG("probe: G down (%s) Give Up=%d Give Up 2=%d", skip ? "break" : "wave", int(a), int(b));
         ++probeLines_;
+        const std::string label = "body" + std::to_string(probeBody_) + (skip ? " break" : " wave");
+        if (probeDumped_.insert(label).second) {
+            ProbeDump(label + " willie", own);
+            ProbeDump(label + " gamemode", lastGameMode_);
+        }
     }
     void TickOwnBuild() {
         if (!adapter_.BuildOn()) { ownBuildActor_ = nullptr; return; }
@@ -6152,6 +6187,8 @@ private:
     GiveUpHold giveUp_;
     std::unordered_map<uint8_t, uint32_t> gaveUp_;   // host: entity -> when it held G (free-for-all, teams, Duel)
     uint32_t kneelBlocked_ = 0;
+    int probeBody_ = 0;
+    std::set<std::string> probeDumped_;
     UObject* giveUpProbed_ = nullptr; uint32_t probeHeldAt_ = 0; int probeLines_ = 0;   // the give-up probe (ProbeGiveUpFunctions)
     bool giveUpWait_ = false;                        // G is held but there is nothing to give up yet (queued for respawn / round gap)
     MapResetGate mapGate_;                           // a queued map reset waits for the respawn and the drop clear
