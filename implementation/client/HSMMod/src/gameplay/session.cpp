@@ -498,7 +498,7 @@ public:
         }
         if (!inFight_) ui::Tick(*this, gameMode);   // the main menu exists only in menu levels (its scan walks every object)
         else if (FighterLevel()) ui::LeaveMenus();
-        if (net_ && FighterLevel()) { TickOwnBuild(); ProbeGiveUpFunctions(); }
+        if (net_ && FighterLevel()) { TickOwnBuild(); TickPlayerDed(); ProbeGiveUpFunctions(); }
         EnsureLocalFighter();
         test::Tick(adapter_, InFightLevel(), dt);
         if (cfg_.record) recorder_.Tick(adapter_, gameMode, FighterLevel(), currentLevel_, adapter_.PlayerWillie(0), dt);
@@ -2215,7 +2215,12 @@ private:
         // hold); the lose it leads to is blocked above, the session decides what G means (GiveUpTick). The flag is cleared
         // so nothing else reads a surrender. Other fighters' kneels (bots giving up) are left alone.
         n += HookScript(kStockFlowOwner, "Willie_BP_C", "Kneel Event", [this](ScriptCall& c) {
-            if (!stockFlowGuard_ || c.self() != myWillie_.load()) return false;
+            if (!stockFlowGuard_) return false;
+            if (c.self() != myWillie_.load()) {
+                if (++kneelOther_ % 20 == 1) HSM_LOG("session: Kneel Event on %s, not my fighter %s; left alone (%u so far)", ObjectName(c.self()).c_str(),
+                                                    ObjectName(myWillie_.load()).c_str(), kneelOther_);
+                return false;
+            }
             SetBool(c.self(), "Give Up", false);
             SetBool(c.self(), "Give Up 2 (Temp)", false);
             if (++kneelBlocked_ % 20 == 1) HSM_LOG("session: blocked stock \"Kneel Event\" on my fighter during a session match (%u so far)", kneelBlocked_);
@@ -2335,6 +2340,19 @@ private:
             ProbeDump(label + " willie", own);
             ProbeDump(label + " gamemode", lastGameMode_);
         }
+    }
+    // The game mode's "Player DED" is set when the player's fighter dies and nothing clears it for a rematch: the first
+    // match's loss stayed on in every match after it (probe dump: the first match's break has Match Won 1, Player DED 0;
+    // the rematch's has Match Won 0, Player DED 1), and the game's give-up (the kneel on G) runs on that state. The flag
+    // follows the fighter again: cleared once the player's body is alive and not waiting for a respawn.
+    void TickPlayerDed() {
+        if (!stockFlowGuard_ || !(lastGameMode_ && ObjectAt(lastGameModeIndex_) == lastGameMode_ && adapter_.World() == lastGameMode_)) return;
+        UObject* own = adapter_.PlayerWillie(0);
+        if (!own || adapter_.IsDead(own) || ownDeadPending_ || !EntityAlive(MyEntity())) return;
+        bool ded = false;
+        if (!GetBool(lastGameMode_, "Player DED", ded) || !ded) return;
+        SetBool(lastGameMode_, "Player DED", false);
+        HSM_LOG("session: the game mode still had Player DED set with my fighter alive; cleared (%u)", ++dedCleared_);
     }
     void TickOwnBuild() {
         if (!adapter_.BuildOn()) { ownBuildActor_ = nullptr; return; }
@@ -6186,7 +6204,7 @@ private:
     uint32_t ownDiedAt_ = 0;
     GiveUpHold giveUp_;
     std::unordered_map<uint8_t, uint32_t> gaveUp_;   // host: entity -> when it held G (free-for-all, teams, Duel)
-    uint32_t kneelBlocked_ = 0;
+    uint32_t kneelBlocked_ = 0, dedCleared_ = 0, kneelOther_ = 0;
     int probeBody_ = 0;
     std::set<std::string> probeDumped_;
     UObject* giveUpProbed_ = nullptr; uint32_t probeHeldAt_ = 0; int probeLines_ = 0;   // the give-up probe (ProbeGiveUpFunctions)
