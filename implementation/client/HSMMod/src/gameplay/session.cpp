@@ -2341,19 +2341,21 @@ private:
     // The game's give-up (the kneel on G, the weapon dropped, the voice lines) keys on its game mode's "Match Won": with it
     // set, G does nothing. The first Survival match runs the game's own win logic, so Match Won is 1 in its breaks and 0
     // in its first wave (the one place the give-up works as designed); a rematch never runs that logic, Match Won stays 0
-    // and every G hold in a break starts the give-up too (probe dump). In a bot format the referee's phase is that logic,
-    // so the game is told the same thing: Match Won is 1 in the break between waves and 0 in a fought wave. Read with the
-    // clocks run on, as GiveUpTick does, so the key and the flag agree on where a break ends.
+    // and every G hold in a break starts the give-up too (probe dump). The referee's phase is that logic now: in a fought
+    // round or wave Match Won is 0 (a new match or round starts from the game's own fresh state, in every format), and in a
+    // bot format's break between waves it is 1. A Duel's round gap and the phases outside a fight are left alone. Read with
+    // the clocks run on, as GiveUpTick does, so the key and the flag agree on where a break ends.
     void TickMatchWon() {
         if (!stockFlowGuard_ || !(lastGameMode_ && ObjectAt(lastGameModeIndex_) == lastGameMode_ && adapter_.World() == lastGameMode_)) return;
         const MatchInfo mi = Extrapolate(info_, infoAt_, NowMs());
         const bool fought = mi.phase == uint8_t(MatchPhase::Live) || mi.phase == uint8_t(MatchPhase::SuddenDeath);
-        if (!IsBotFormat(Format(mi.format)) || !fought) return;
+        if (!fought || InRoundGap(mi)) return;
         const bool want = InWaveBreak(mi);
         bool won = false;
         if (!GetBool(lastGameMode_, "Match Won", won) || won == want) return;
         SetBool(lastGameMode_, "Match Won", want);
-        HSM_LOG("session: game mode Match Won %d -> %d (%s) (%u)", int(won), int(want), want ? "break between waves" : "wave being fought", ++wonSet_);
+        HSM_LOG("session: game mode Match Won %d -> %d (%s, format %u) (%u)", int(won), int(want), want ? "break between waves" : "round or wave being fought",
+                unsigned(mi.format), ++wonSet_);
     }
     void TickOwnBuild() {
         if (!adapter_.BuildOn()) { ownBuildActor_ = nullptr; return; }
