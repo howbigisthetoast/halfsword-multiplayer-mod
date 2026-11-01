@@ -2210,6 +2210,17 @@ private:
         int n = HookScript(kStockFlowOwner, "Willie_BP_C", "Event Lose Match", block("Event Lose Match"));
         n += HookScript(kStockFlowOwner, "Willie_BP_C", "Force Finish Match", block("Force Finish Match"));
         n += HookScript(kStockFlowOwner, "Willie_BP_C", "Call Minus Enemy", block("Call Minus Enemy"));
+        // The game's own give-up pose (kneel, weapon dropped, voice lines) on this machine's fighter. Holding G made it play
+        // in every Survival rematch but never in the first match (probe log: Give Up flips to 1 half a second into the
+        // hold); the lose it leads to is blocked above, the session decides what G means (GiveUpTick). The flag is cleared
+        // so nothing else reads a surrender. Other fighters' kneels (bots giving up) are left alone.
+        n += HookScript(kStockFlowOwner, "Willie_BP_C", "Kneel Event", [this](ScriptCall& c) {
+            if (!stockFlowGuard_ || c.self() != myWillie_.load()) return false;
+            SetBool(c.self(), "Give Up", false);
+            SetBool(c.self(), "Give Up 2 (Temp)", false);
+            if (++kneelBlocked_ % 20 == 1) HSM_LOG("session: blocked stock \"Kneel Event\" on my fighter during a session match (%u so far)", kneelBlocked_);
+            return true;
+        });
         HSM_LOG("session: stock win/lose flow guard %s (%d function(s) hooked now)", ScriptHookActive() ? "on" : "NOT ACTIVE (no script VM hook)", n);
     }
 
@@ -6140,6 +6151,7 @@ private:
     uint32_t ownDiedAt_ = 0;
     GiveUpHold giveUp_;
     std::unordered_map<uint8_t, uint32_t> gaveUp_;   // host: entity -> when it held G (free-for-all, teams, Duel)
+    uint32_t kneelBlocked_ = 0;
     UObject* giveUpProbed_ = nullptr; uint32_t probeHeldAt_ = 0; int probeLines_ = 0;   // the give-up probe (ProbeGiveUpFunctions)
     bool giveUpWait_ = false;                        // G is held but there is nothing to give up yet (queued for respawn / round gap)
     MapResetGate mapGate_;                           // a queued map reset waits for the respawn and the drop clear
